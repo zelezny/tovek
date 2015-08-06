@@ -1,0 +1,463 @@
+--- 
+title       : "Hybatelé 2015"
+subtitle    : 
+author      : "Filip Železný"
+job         : 
+framework   : revealjs        # {io2012, html5slides, shower, dzslides, ...}
+revealjs:
+  theme: sky
+highlighter : highlight.js  # {highlight.js, prettify, highlight}
+hitheme     : tomorrow      # 
+widgets     : [mathjax]            # {mathjax, quiz, bootstrap}
+mode        : standalone   # {selfcontained, standalone, draft}
+knit        : slidify::knit2slides
+output: ioslides_presentation
+#output:
+#  html_document:
+#    pandoc_args: ["+RTS", "-K64m","-RTS"]reve
+
+
+---
+  ```{r setup, echo=F, message=FALSE}
+library(knitr)
+library(rgl)
+library(ggplot2)
+library(R.utils) # e.g. for arrayIndex
+library(igraph)
+library(MASS)
+library(proxy)
+library(arules)
+library(biclust)
+
+load("../workspace.RData")
+ctgcol = c("red", "brown", "blue", "black", "green")
+names(ctgcol) = levels(actors$domain)
+
+knit_hooks$set(webgl = hook_webgl)
+opts_chunk$set(cache = F, echo=F)
+```
+
+### Actor Domains
+---
+  132 actors + 8 never mentioned
+
+```{r pie1, echo=F}
+x = tapply(actors$domain, actors$domain, length)
+pie(x, col=ctgcol, cex=2)
+```
+---
+  ### News Categories
+  ---
+  5000 news articles in 9 categories
+
+```{r pie2, echo=F}
+x = tapply(news$kategorie, news$kategorie, length)
+pie(x, cex=2)
+```
+
+---
+  ### News Sources
+  ---
+  5000 news articles in 592 sources
+
+```{r pie3, echo=F, fig.width=10}
+x = tapply(news$zdroj, news$zdroj, length)
+l=rep("",length(x))
+l[x>100] = names(x)[x>100]
+pie(x, labels=l, cex=2)
+```
+
+---
+  ### Actor/News Mention Heatmap
+  ---
+  ```{r heatmap, echo=F, fig.width=10}
+image(as.matrix(actors[ani]), axes=F, xlab="actors", ylab="news", cex.lab=2)
+```
+
+---
+  ### Mention Counts of Actors
+  ---
+  
+  ```{r hist1, echo=F, fig.width=10}
+v = as.data.frame(colSums(news[nai]))
+names(v)=c("nm")
+#qplot(nm, data=v, geom="histogram",col="black", fill="grey", binwidth=50, xlab="xxxx")
+m = ggplot(v, aes(x=nm))
+m + geom_histogram(aes(cex.axis=2), col="black", fill=rgb(.74902,.88232,.91765), binwidth=50, cex=1) + labs(x = "# of mentioning articles", y = "# of actors") + theme(axis.title.y = element_text(size = rel(1.8), angle = 90)) + theme(axis.title.x = element_text(size = rel(1.8), angle = 0), panel.border = element_rect(colour = "black", fill=NA, size=3)) + theme(panel.background = element_rect(colour = rgb(.74902,.88232,.91765)))
+```
+
+---
+  
+  ### Top 10 Most Mentioned
+  ---
+  ```{r, echo=F, fig.align="center", fig.width=10}
+#load("../workspace.RData")
+v = as.data.frame(sort(colSums(news[nai]), decreasing = T)[1:10])
+v = cbind(row.names(v),v)
+names(v)=c("name","tm")
+ggplot(v, aes(x=reorder(name,tm), y=tm)) + geom_bar(stat='identity', col="black", fill=rgb(.74902,.88232,.91765), cex.axis=2) + coord_flip()  + theme(axis.text=element_text(size=20, color = "black"), axis.title.x = element_text(size = rel(1.8)))  + labs(y = "times mentioned", x = "")
+```
+
+---
+  ### 3D Projection (PCA)
+  ---
+  original coordinates = mentioning articles, colors = domains
+
+```{r pca, webgl=T,  fig.width=10}
+pca.actors=prcomp(actors[ani]) # alt: pca on actors
+domcol=c("red","brown","blue","black","green")
+names(domcol)=levels(actors$domain)
+plot3d(pca.actors$x,col=ctgcol[actors$domain], xlab = "", ylab = "", zlab="", axes=F)
+axes3d(box=T, tick=F, labels=F, xlen=0, ylen=0, zlen=0)
+text3d(pca.actors$x[,1:3],texts=rownames(actors),cex=0.6,col=ctgcol[actors$domain])
+```
+
+---
+  ### 3D Projection of Articles
+  ---
+  original coordinates = mentioned actors, colors = category
+
+```{r pca on articles, webgl=T,  fig.width=10}
+vr = 4 # which variable to color by
+katcol=1:length(levels(as.factor(news[[vr]])))
+M = as.matrix(news[nai])
+pca = prcomp(M)
+plot3d(pca$x,col=katcol[as.factor(news[[vr]])], xlab = "", ylab = "", zlab="", axes=F)
+axes3d(box=T, tick=F, labels=F, xlen=0, ylen=0, zlen=0)
+axnames = c("Česká.pošta", "Miloš.Zeman", "Lucie.Bílá", "Václav.Klaus", "Andrej.Babiš")
+#axnames = c("Česká.pošta", "Lucie.Bílá")
+text3d(pca$rotation[axnames,1:3], texts=axnames)
+coords <- NULL
+for (i in 1:length(axnames)) {
+  coords <- rbind(coords, rbind(c(0,0,0),pca$rotation[axnames[i],1:3]))
+}
+lines3d(coords, col="green", lwd=4)
+```
+
+---
+  ### Predict Actor Domain <br> from Mentions
+  ---
+  
+  #### Example decision rules (from news category)
+  
+  
+  <em>
+  (sp >= 3) and (ku <= 3) => actors.domain=Sport 
+
+(dz <= 1) and (sp >= 1) => actors.domain=Sport 
+
+(bu >= 1) and (dz <= 16) => actors.domain=Kultura 
+
+(bu >= 16) => actors.domain=Kultura 
+
+=> actors.domain=Politika 
+</em>
+  
+  - Rules 65%, Tree 67%, SVM (from zdroj) 71% 
+
+- Baseline: random 25%, majority vote 50%
+  
+  ---
+  ### Predict Article Category <br> from Mentions of Actors
+  ---
+  
+  #### Example decision rules (listing not complete)
+  
+  
+  <em>
+  (Leoš.Mareš >= 1) and (Lucie.Bílá <= 0) and (Karel.Gott <= 0) and (Roman.Vojtek <= 0) => news.kategorie=ho
+
+(Jaromír.Jágr >= 1) and (Lucie.Bílá <= 0) => news.kategorie=sp 
+
+(Lucie.Bílá >= 1) and (Daniel.Landa >= 1) => news.kategorie=ku
+
+(Lucie.Bílá >= 1) and (Roman.Vojtek >= 1) => news.kategorie=bu (31.0/0.0)
+
+(Škoda.Auto >= 1) => news.kategorie=ez 
+
+
+
+=> news.kategorie=dz (4408.0/1652.0)
+</em>
+  
+  - Rules: 64%, Tree 69%, SVM 69% 
+
+- Baseline: random 11%, majority vote 50%
+  
+  
+  ---
+  ### Joint Actor-Actor Mentions
+  ---
+  
+  ```{r, echo = F}
+v = actors.ip
+v[is.na(v)] = 0
+v = t(v)/max(v) + log(v+1)/max(log(v+1))
+diag(v)=max(v)
+par(bg = "white")
+image(v, axes=F)
+text(x=0.5, y=0.9, labels="normal scale", cex =2)
+text(x=0.5, y=0.1, labels="log scale", cex =2)
+````
+
+`r sum(actors.ip==0, na.rm=T)` out of `r 140^2/2` actor pairs never co-mentioned.
+
+
+---
+  
+  ### Joint Actor-Actor Mentions
+  ---
+  
+  ```{r, echo = F, webgl = T, fig.width= 10}
+colors = heat.colors(max(actors.ip+1, na.rm=T))
+
+persp3d(actors.ip, back="line", col=colors[actors.ip+1], axes=F, xlab = "", ylab = "", zlab="# Co-Mentions")
+axis3d(edge= 'z', at=c(0,100,300,400))
+
+````
+
+`r sum(actors.ip==0, na.rm=T)` out of `r 140^2/2` actor pairs never co-mentioned.
+
+---
+  ### Co-Mention Counts
+  ---
+  
+  ```{r hist2, echo=F, fig.width=10}
+hist(actors.ip, col=rgb(.74902,.88232,.91765), ylim=c(0,100), xlab="# of co-mentions", ylab = "# of actor pairs", main="")
+
+#+ labs(x = "# of mentioning articles", y = "# of actors") + theme(axis.title.y = element_text(size = rel(1.8), angle = 90)) + theme(axis.title.x = element_text(size = rel(1.8), angle = 0), panel.border = element_rect(colour = "black", fill=NA, size=3)) + theme(panel.background = element_rect(colour = rgb(.74902,.88232,.91765)))
+```
+
+
+---
+  
+  ### Top Ten Co-Mentioned Pairs
+  ---
+  
+  ```{r, echo = F, fig.width=10}
+i=arrayIndex(order(actors.ip, decreasing = T)[1:10], dim=dim(actors.ip))
+v = apply(i, 2, function(x) rownames(actors)[x])
+pv = paste(v[,1],"+",v[,2])
+v = data.frame(pv,actors.ip[i])
+names(v)=c("name","tm")
+ggplot(v, aes(x=reorder(name,tm), y=tm)) + geom_bar(stat='identity', col="black", fill=rgb(.74902,.88232,.91765), cex.axis=2) + coord_flip()  + theme(axis.text=element_text(size=20, color = "black"), axis.title.x = element_text(size = rel(1.8)))  + labs(y = "times co-mentioned", x = "")
+```
+
+---
+  ### Least/Most Co-Mentioned <br> on Average
+  ---
+  ```{r, echo=F, fig.align="center", fig.width=10}
+cm=colMeans(ma %*% t(ma), na.rm=T)
+v = c(sort(cm, decreasing = T)[1:5],sort(cm, decreasing = F)[1:5])
+v = data.frame(names(v),v)
+names(v)=c("name","dist")
+#rgb(.74902,.88232,.91765)
+ggplot(v, aes(x=reorder(name,dist), y=dist)) + geom_bar(stat='identity', col="black", fill=c(rep(1,5),rep(2,5)), cex.axis=2) + coord_flip(ylim=c(0,35))  + theme(axis.ticks = element_blank(),  axis.text=element_text(size=20, color = "black"), axis.title.x = element_text(size = rel(1.8)))  + labs(y = "Avg. # of co-mentions with other actors", x = "")  
+```
+
+---
+  
+  ### Hierarchical clustering
+  ---
+  in which similarity = number of co-mentions
+```{r, echo=F, fig.width=13}
+actors.ip.hc = hclust(actors.ip.dst)
+plot(actors.ip.hc, cex=0.6, main="", xlab="", ylab="", sub="", axes=F)
+```
+
+---
+  ### Co-Mentioning Graph
+  ---
+  Edge if at least 100 times co-mentioned
+
+```{r co-mentioning graph}
+thr = 100# edge if at least X times co-mentioned
+m = as.matrix(actors.ip)
+m[m<thr] = 0
+g=graph_from_adjacency_matrix(m, mode="lower", diag=F, weighted=T)
+gc = clusters(g)
+cluster=which(gc$membership==which(gc$csize>1))
+
+gclust=graph_from_adjacency_matrix(m[cluster,cluster], mode="lower", diag=F, weighted=T)
+E(gclust)$width=E(gclust)$weight/50
+V(gclust)$label.cex=log(colSums(news[,names(cluster)]))/5
+V(gclust)$color = actors$domain[cluster]
+plot.igraph(gclust)
+```
+
+---
+  ### Actor-Actor Similarity
+  ---
+  
+  - Co-mention rate is normalized by individual mention rates
+
+- $$
+  \frac{ab}{ \sqrt{ |a||b| }} \sim \frac{ \textrm{# of co-mentions}}{ \sqrt{ \textrm{# of } a\textrm{'s mentions}  \times \textrm{# of } b\textrm{'s mentions} } }
+    \\[10pt]$$
+      
+      - Known as __cosine similarity__
+    
+    ---
+      ### Actor-Actor Similarity
+      ---
+      
+      ```{r similarity, echo = F}
+    v = 1-actors.cs.dst.m
+    v[is.na(v)] = 0
+    v = t(v)/max(v) + log(v+1)/max(log(v+1))
+    diag(v)=max(v)
+    par(bg = "white")
+    image(v, axes=F)
+    text(x=0.5, y=0.9, labels="normal scale", cex =2)
+    text(x=0.5, y=0.1, labels="log scale", cex =2)
+    ```
+    
+    ---
+      ### Top Ten Similar Pairs
+      ---
+      
+      ```{r toptensim, echo = F, fig.width=10}
+    i=arrayIndex(order(actors.cs.dst.m)[1:10], dim=dim(actors.cs.dst.m))
+    v = apply(i, 2, function(x) rownames(actors)[x])
+    pv = paste(v[,1],"+",v[,2])
+    v = data.frame(pv,actors.cs.dst.m[i])
+    names(v)=c("name","tm")
+    ggplot(v, aes(x=reorder(name,1-tm), y=1-tm)) + geom_bar(stat='identity', col="black", fill=rgb(.74902,.88232,.91765), cex.axis=2) + coord_flip()  + theme(axis.text=element_text(size=20, color = "black"), axis.title.x = element_text(size = rel(1.8)))  + labs(y = "similarity", x = "")
+    ```
+    
+    ---
+      ### Least/Most Similar to the Rest
+      ---
+      ```{r similar_to_rest, echo=F, fig.align="center", fig.width=10}
+    cm=colMeans.dist(actors.cs.dst, diag=F)
+    v = c(sort(cm, decreasing = T)[1:5],sort(cm, decreasing = F)[1:5])
+    v = data.frame(names(v),v)
+    names(v)=c("name","dist")
+    #rgb(.74902,.88232,.91765)
+    ggplot(v, aes(x=reorder(name,dist), y=dist)) + geom_bar(stat='identity', col="black", fill=c(rep(1,5),rep(2,5)), cex.axis=2) + coord_flip(ylim=c(0.9,1))  + theme(axis.ticks = element_blank(), axis.text.x = element_blank(), axis.text=element_text(size=20, color = "black"), axis.title.x = element_text(size = rel(1.8)))  + labs(y = "dissimilarity (distance)", x = "")  
+    ```
+    
+    ---
+      ### Hierarchical clustering
+      ---
+      in which the __cosine similarity__ is used
+    ```{r hclust, echo=F, fig.width=13}
+    actors.hc = hclust(actors.cs.dst)
+    plot(actors.hc, cex=0.6, main="", xlab="", ylab="", sub="", axes=F)
+    ```
+    
+    ---
+      ### Similarity Graph
+      ---
+      ```{r similarity graph, fig.width=9, fig.height=9}
+    thr = 0.3# edge if at least X times co-mentioned
+    m = as.matrix(1-actors.cs.dst.m)
+    m[m<thr] = 0
+    g=graph_from_adjacency_matrix(m, mode="lower", diag=F, weighted=T)
+    gc = clusters(g)
+    cluster=which(is.element(gc$membership,which(gc$csize>1)))
+    
+    gclust=graph_from_adjacency_matrix(m[cluster,cluster], mode="lower", diag=F, weighted=T)
+    E(gclust)$width=E(gclust)$weight*10
+    V(gclust)$label.cex=log(10+colSums(news[,rownames(actors[cluster,])]))/4
+    V(gclust)$color =  actors$domain[cluster] # ctgcol[actors$domain[cluster]]
+    plot.igraph(gclust)
+    
+    ```
+    
+    
+    ---
+      ### 2D Projection (MDS)
+      ---
+      similar are near each other
+    
+    ```{r, include=FALSE}
+    actors.cmd2d = sammon(actors.cs.dst, k=2)
+    ```
+    
+    ```{r mds2d, echo=F, message=FALSE, warning=FALSE, fig.width=10, fig.height=8}
+    cm = colMeans.dist(actors.cs.dst, diag=F)
+    cmcol=rgb(0.5,0.5,(cm-min(cm))/(max(cm)-min(cm)))
+    
+    
+    plot(actors.cmd2d$points, col=ctgcol[actors$domain], main = "", sub="", xlab = "", ylab = "", axes=F, pch=20)
+    #axes(box=T, tick=F, labels=F, xlen=0, ylen=0, zlen=0, main="")
+    text(actors.cmd2d$points[,1:2],rownames(actors),cex=1, col=ctgcol[actors$domain])
+    ```
+    
+    
+    ---
+      ### Frequent Set Associations
+      ---
+      
+      ```{r itemsets-comp, echo=F, warning=F,message=F, include=F}
+    x = (news[nai]>0)
+    itsets = apriori(x, parameter=list(target="maximally", support = 0.0050, minlen=4))
+    ```
+    
+    ```{r itemsets, echo=F, warning=F,message=F}
+    inspect(itsets)
+    ```
+    
+    ---
+      ### Association Rules
+      ---
+      
+      ```{r arules-comp, echo=F, warning=F,message=F, include=F}
+    rules = apriori(x, parameter=list(target="rules", support = 0.005))
+    ```
+    
+    ```{r arules, echo=F, warning=F,message=F}
+    inspect(rules)
+    ```
+    Not causality (date ignored)!
+      
+      ---
+      ### Frequent Association Sets of Sources
+      ---
+      
+      ```{r itemsets-comp2 , echo=F, warning=F,message=F, include=F}
+    x = (t(zdroj[zai])>0)
+    itsets.z = apriori(x, parameter=list(target="maximally", minlen = 2, support = 0.2))
+    rules.z = apriori(x, parameter=list(target="rules", support = 0.2))
+    ```
+    
+    ```{r itsets.z, echo=F, warning=F,message=F}
+    inspect(itsets.z)
+    ```
+    
+    
+    ---
+      ### Association Rules on Sources
+      ---
+      
+      ```{r rules.z, echo=F, warning=F,message=F}
+    inspect(rules.z)
+    ```
+    Not causality (date ignored)!
+      
+      ---
+      ### Biclustering example
+      ---
+      
+      ```{r biclust, echo=F}
+    l=as.matrix(zdroj[zai])
+    bc = biclust(x=l, method=BCBimax(), minr=7, minc=7, number=10)
+    drawHeatmap(x=l, bc, number=2)
+    ````
+    
+    ---
+      ### Possible future work
+      ---
+      
+      - Operations on NEWS as done on ACTOR
+    - More exploitation of factors
+    - <strong>Time-series analysis</strong> (emerging actors, etc.)
+    - Relational learning and link discovery
+    - Relational Rule Example
+    
+    
+    
+    
+    $$ involved(Actor, Case)  \leftarrow \\ involved(Actor2, Case) \wedge \\ linked(Actor,Actor2) $$
+      

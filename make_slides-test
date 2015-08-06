@@ -1,0 +1,5 @@
+rm -r .cache
+echo 'library(slidify)
+slidify("index-test.Rmd")
+quit(save="no")
+' | R --no-save
